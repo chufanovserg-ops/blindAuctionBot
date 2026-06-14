@@ -9,7 +9,7 @@ from flask import Flask
 
 # ========== ТОКЕНЫ (ЗАМЕНИТЕ НА СВОИ) ==========
 TELEGRAM_TOKEN = "8876252162:AAGiBvNqniHXK4emXXeierk1B-n4w1ihBVI"   # например "123456:ABCdef..."
-REPLICATE_API_TOKEN = "r8_VkjWmJGLRvdmzbKFeEvKWt7XNg2I7IZ4Ys6Mh"              # ваш токен от replicate.com
+REPLICATE_API_TOKEN = "r8_JKxkgxU1Cj1nfNIQP6VZWTJmwNlcYfx4UyZGM"              # ваш токен от replicate.com
 # ===============================================
 
 bot = Bot(token=TELEGRAM_TOKEN)
