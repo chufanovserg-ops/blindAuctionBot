@@ -1,4 +1,6 @@
-aiogram
-Flask
-aiohttp
-python-dotenv
+aiogram==3.4.1
+aiohttp==3.9.3
+python-dotenv==1.0.0
+flask==3.0.0
+gunicorn==21.2.0
+huggingface-hub==0.20.3
