@@ -1,27 +1,32 @@
+import os
 import logging
 import asyncio
 import random
 import threading
 import aiohttp
+from io import BytesIO
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from flask import Flask
 
-# ========== ТОКЕНЫ ==========
-TELEGRAM_TOKEN = "8876252162:AAGiBvNqniHXK4emXXeierk1B-n4w1ihBVI"  # Токен от BotFather
-HF_TOKEN = "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"                    # Новый токен от Hugging Face
-# ============================
+# ========== ТОКЕНЫ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ==========
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+HF_TOKEN = os.getenv("HF_TOKEN")
+
+if not TELEGRAM_TOKEN or not HF_TOKEN:
+    raise RuntimeError("Не заданы переменные окружения TELEGRAM_TOKEN или HF_TOKEN")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ----- Редкости и генерация имен -----
 RARITIES = [
     {"name": "обычный", "chance": 70, "emoji": "⬜", "prompt_prefix": "simple, common"},
     {"name": "редкий", "chance": 20, "emoji": "🟦", "prompt_prefix": "intricate, glowing"},
     {"name": "легендарный", "chance": 8, "emoji": "🌟", "prompt_prefix": "epic, legendary, masterpiece"},
-    {"name": "эпический", "chance": 2, "emoji": "💎", "prompt_prefix": "godly, transcendent"},
+    {"name": "эпический", "chance": 2, "emoji": "💎", "prompt_prefix": "godly, transcendent, cosmic"},
 ]
 
 def choose_rarity():
@@ -43,15 +48,14 @@ def generate_artifact_name(rarity):
     else:
         return f"{rarity['name'].capitalize()} {theme}"
 
+# ----- Генерация картинки через Hugging Face с повторами при DNS-ошибке -----
 async def generate_image_hf(prompt, retries=3):
-    """Генерация изображения через бесплатный Hugging Face API с повторными попытками."""
     api_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     payload = {
         "inputs": prompt,
         "parameters": {"negative_prompt": "blurry, ugly, low quality"}
     }
-
     for attempt in range(retries):
         try:
             async with aiohttp.ClientSession() as session:
@@ -61,26 +65,25 @@ async def generate_image_hf(prompt, retries=3):
                         return image_data
                     else:
                         error_text = await resp.text()
-                        logging.error(f"Hugging Face error {resp.status}: {error_text}")
+                        logger.error(f"Hugging Face error {resp.status}: {error_text}")
                         return None
-
         except aiohttp.client_exceptions.ClientConnectorDNSError as e:
-            logging.warning(f"DNS ошибка при попытке {attempt+1}/{retries}: {e}")
+            logger.warning(f"DNS ошибка, попытка {attempt+1}/{retries}: {e}")
             if attempt < retries - 1:
-                await asyncio.sleep(2 ** attempt)  # Ожидание 1, 2, 4 секунды
+                await asyncio.sleep(2 ** attempt)  # 1, 2, 4 секунды
             else:
-                logging.error(f"Не удалось подключиться после {retries} попыток.")
+                logger.error("Не удалось подключиться после всех попыток")
                 return None
-
         except Exception as e:
-            logging.exception(f"Неизвестная ошибка при генерации: {e}")
+            logger.exception(f"Неизвестная ошибка: {e}")
             return None
     return None
 
+# ----- Команды бота -----
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "🔮 *Артефакториум (на Hugging Face)*\n\n"
+        "🔮 *Артефакториум*\n\n"
         "Я создаю уникальные предметы с помощью нейросети.\n"
         "/buy — получить случайный артефакт с картинкой\n"
         "/help — справка",
@@ -93,13 +96,12 @@ async def cmd_help(message: types.Message):
 
 @dp.message(Command("buy"))
 async def cmd_buy(message: types.Message):
-    waiting_msg = await message.answer("🎨 Генерирую артефакт, подождите 5–10 секунд...")
+    waiting_msg = await message.answer("🎨 Генерирую артефакт, подождите 10–15 секунд...")
     rarity = choose_rarity()
     name = generate_artifact_name(rarity)
     prompt = f"{rarity['prompt_prefix']}, {name}, fantasy artifact, digital art, detailed, beautiful"
     image_data = await generate_image_hf(prompt)
     if image_data:
-        from io import BytesIO
         photo = BytesIO(image_data)
         photo.name = "artifact.png"
         caption = f"{rarity['emoji']} *{name}*\nРедкость: {rarity['name']}"
@@ -112,8 +114,9 @@ async def cmd_buy(message: types.Message):
 async def fallback(message: types.Message):
     await message.answer("Неизвестная команда. Напишите /start")
 
-# Flask для Render
+# ----- Flask-сервер для Render (занятие порта) -----
 flask_app = Flask(__name__)
+
 @flask_app.route('/')
 def health():
     return "Bot is running", 200
@@ -121,9 +124,10 @@ def health():
 def run_flask():
     flask_app.run(host='0.0.0.0', port=10000)
 
+# ----- Запуск -----
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Бот запущен (Hugging Face)")
+    logger.info("Бот запущен (Hugging Face, переменные окружения)")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
