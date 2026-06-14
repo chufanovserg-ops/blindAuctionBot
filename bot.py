@@ -7,32 +7,29 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from flask import Flask
 
-# ========== ТОКЕНЫ (ЗАМЕНИТЕ НА СВОИ) ==========
-TELEGRAM_TOKEN = "8876252162:AAGiBvNqniHXK4emXXeierk1B-n4w1ihBVI"   # например "123456:ABCdef..."
-REPLICATE_API_TOKEN = "r8_JKxkgxU1Cj1nfNIQP6VZWTJmwNlcYfx4UyZGM"              # ваш токен от replicate.com
-# ===============================================
+# ========== ТОКЕНЫ ==========
+TELEGRAM_TOKEN = "8876252162:AAGiBvNqniHXK4emXXeierk1B-n4w1ihBVI"  # Токен от BotFather
+HF_TOKEN = "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"                    # Новый токен от Hugging Face
+# ============================
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
-
-# --- Настройка логов ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- База редкостей ---
 RARITIES = [
     {"name": "обычный", "chance": 70, "emoji": "⬜", "prompt_prefix": "simple, common"},
     {"name": "редкий", "chance": 20, "emoji": "🟦", "prompt_prefix": "intricate, glowing"},
     {"name": "легендарный", "chance": 8, "emoji": "🌟", "prompt_prefix": "epic, legendary, masterpiece"},
-    {"name": "эпический", "chance": 2, "emoji": "💎", "prompt_prefix": "godly, transcendent, cosmic"},
+    {"name": "эпический", "chance": 2, "emoji": "💎", "prompt_prefix": "godly, transcendent"},
 ]
 
 def choose_rarity():
     r = random.randint(1, 100)
-    cumulative = 0
+    cum = 0
     for rar in RARITIES:
-        cumulative += rar["chance"]
-        if r <= cumulative:
+        cum += rar["chance"]
+        if r <= cum:
             return rar
     return RARITIES[0]
 
@@ -46,51 +43,33 @@ def generate_artifact_name(rarity):
     else:
         return f"{rarity['name'].capitalize()} {theme}"
 
-async def generate_image(prompt):
-    url = "https://api.replicate.com/v1/predictions"
-    headers = {
-        "Authorization": f"Token {REPLICATE_API_TOKEN}",
-        "Content-Type": "application/json"
-    }
+async def generate_image_hf(prompt):
+    """Генерация изображения через бесплатный Hugging Face API"""
+    # Используем проверенную модель SDXL (можно заменить на другую)
+    api_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     payload = {
-        "version": "39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b",  # SDXL
-        "input": {
-            "prompt": prompt,
-            "negative_prompt": "blurry, ugly, low quality",
-            "width": 768,
-            "height": 768,
-            "num_outputs": 1
-        }
+        "inputs": prompt,
+        "parameters": {"negative_prompt": "blurry, ugly, low quality"}
     }
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(url, json=payload, headers=headers) as resp:
-                data = await resp.json()
-                if resp.status != 201:
-                    logger.error(f"Replicate error {resp.status}: {data}")
+            async with session.post(api_url, json=payload, headers=headers) as resp:
+                if resp.status == 200:
+                    image_data = await resp.read()
+                    return image_data
+                else:
+                    error_text = await resp.text()
+                    logger.error(f"Hugging Face error {resp.status}: {error_text}")
                     return None
-                pred_id = data["id"]
-            # Ждём результат
-            for _ in range(30):  # 30 секунд таймаут
-                await asyncio.sleep(1)
-                async with session.get(f"{url}/{pred_id}", headers=headers) as status_resp:
-                    status_data = await status_resp.json()
-                    if status_data["status"] == "succeeded":
-                        return status_data["output"][0]
-                    elif status_data["status"] == "failed":
-                        logger.error(f"Replicate failed: {status_data}")
-                        return None
-            logger.error("Replicate timeout")
-            return None
         except Exception as e:
-            logger.exception("Replicate exception")
+            logger.exception("HF exception")
             return None
 
-# --- Команды бота ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "🔮 *Артефакториум*\n\n"
+        "🔮 *Артефакториум (на Hugging Face)*\n\n"
         "Я создаю уникальные предметы с помощью нейросети.\n"
         "/buy — получить случайный артефакт с картинкой\n"
         "/help — справка",
@@ -103,15 +82,17 @@ async def cmd_help(message: types.Message):
 
 @dp.message(Command("buy"))
 async def cmd_buy(message: types.Message):
-    # Сообщим, что начали генерацию
     waiting_msg = await message.answer("🎨 Генерирую артефакт, подождите 5–10 секунд...")
     rarity = choose_rarity()
     name = generate_artifact_name(rarity)
     prompt = f"{rarity['prompt_prefix']}, {name}, fantasy artifact, digital art, detailed, beautiful"
-    image_url = await generate_image(prompt)
-    if image_url:
+    image_data = await generate_image_hf(prompt)
+    if image_data:
+        from io import BytesIO
+        photo = BytesIO(image_data)
+        photo.name = "artifact.png"
         caption = f"{rarity['emoji']} *{name}*\nРедкость: {rarity['name']}"
-        await message.answer_photo(photo=image_url, caption=caption, parse_mode="Markdown")
+        await message.answer_photo(photo=photo, caption=caption, parse_mode="Markdown")
         await waiting_msg.delete()
     else:
         await waiting_msg.edit_text("❌ Не удалось создать артефакт. Попробуйте позже.")
@@ -120,9 +101,8 @@ async def cmd_buy(message: types.Message):
 async def fallback(message: types.Message):
     await message.answer("Неизвестная команда. Напишите /start")
 
-# --- Flask-сервер для Render (чтобы открыть порт) ---
+# Flask для Render
 flask_app = Flask(__name__)
-
 @flask_app.route('/')
 def health():
     return "Bot is running", 200
@@ -130,15 +110,11 @@ def health():
 def run_flask():
     flask_app.run(host='0.0.0.0', port=10000)
 
-# --- Запуск бота в отдельном потоке ---
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Бот запущен и слушает сообщения...")
+    logger.info("Бот запущен (Hugging Face)")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    # Запускаем Flask в фоновом потоке
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    # Запускаем асинхронного бота
+    threading.Thread(target=run_flask, daemon=True).start()
     asyncio.run(main())
