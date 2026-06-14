@@ -1,3 +1,4 @@
 aiogram
 Flask
 aiohttp
+python-dotenv
