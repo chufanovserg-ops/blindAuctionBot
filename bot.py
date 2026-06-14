@@ -43,28 +43,39 @@ def generate_artifact_name(rarity):
     else:
         return f"{rarity['name'].capitalize()} {theme}"
 
-async def generate_image_hf(prompt):
-    """Генерация изображения через бесплатный Hugging Face API"""
-    # Используем проверенную модель SDXL (можно заменить на другую)
+async def generate_image_hf(prompt, retries=3):
+    """Генерация изображения через бесплатный Hugging Face API с повторными попытками."""
     api_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     payload = {
         "inputs": prompt,
         "parameters": {"negative_prompt": "blurry, ugly, low quality"}
     }
-    async with aiohttp.ClientSession() as session:
+
+    for attempt in range(retries):
         try:
-            async with session.post(api_url, json=payload, headers=headers) as resp:
-                if resp.status == 200:
-                    image_data = await resp.read()
-                    return image_data
-                else:
-                    error_text = await resp.text()
-                    logger.error(f"Hugging Face error {resp.status}: {error_text}")
-                    return None
+            async with aiohttp.ClientSession() as session:
+                async with session.post(api_url, json=payload, headers=headers) as resp:
+                    if resp.status == 200:
+                        image_data = await resp.read()
+                        return image_data
+                    else:
+                        error_text = await resp.text()
+                        logging.error(f"Hugging Face error {resp.status}: {error_text}")
+                        return None
+
+        except aiohttp.client_exceptions.ClientConnectorDNSError as e:
+            logging.warning(f"DNS ошибка при попытке {attempt+1}/{retries}: {e}")
+            if attempt < retries - 1:
+                await asyncio.sleep(2 ** attempt)  # Ожидание 1, 2, 4 секунды
+            else:
+                logging.error(f"Не удалось подключиться после {retries} попыток.")
+                return None
+
         except Exception as e:
-            logger.exception("HF exception")
+            logging.exception(f"Неизвестная ошибка при генерации: {e}")
             return None
+    return None
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
