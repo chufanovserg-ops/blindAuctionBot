@@ -9,19 +9,18 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from flask import Flask
 
-# ========== ТОКЕНЫ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ==========
+# ========== ТОЛЬКО ТОКЕН TELEGRAM (из переменных окружения) ==========
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-HF_TOKEN = os.getenv("HF_TOKEN")
 
-if not TELEGRAM_TOKEN or not HF_TOKEN:
-    raise RuntimeError("Не заданы переменные окружения TELEGRAM_TOKEN или HF_TOKEN")
+if not TELEGRAM_TOKEN:
+    raise RuntimeError("Не задана переменная окружения TELEGRAM_TOKEN")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ----- Редкости и генерация имен -----
+# ----- Редкости и генерация имен (без изменений) -----
 RARITIES = [
     {"name": "обычный", "chance": 70, "emoji": "⬜", "prompt_prefix": "simple, common"},
     {"name": "редкий", "chance": 20, "emoji": "🟦", "prompt_prefix": "intricate, glowing"},
@@ -48,42 +47,40 @@ def generate_artifact_name(rarity):
     else:
         return f"{rarity['name'].capitalize()} {theme}"
 
-# ----- Генерация картинки через Hugging Face с повторами при DNS-ошибке -----
-async def generate_image_hf(prompt, retries=3):
-    api_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    payload = {
-        "inputs": prompt,
-        "parameters": {"negative_prompt": "blurry, ugly, low quality"}
-    }
-    for attempt in range(retries):
+# ----- НОВАЯ функция генерации картинки через Pollinations AI (без токена!) -----
+async def generate_image_pollinations(prompt):
+    # Экранируем промпт для URL
+    encoded_prompt = aiohttp.helpers.quote(prompt)
+    # Используем параметр для получения обычного изображения, а не SVG
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=768&height=768&nologo=true"
+    
+    for attempt in range(3): # Делаем 3 попытки на случай временных сбоев
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(api_url, json=payload, headers=headers) as resp:
+                async with session.get(url) as resp:
                     if resp.status == 200:
                         image_data = await resp.read()
-                        return image_data
+                        # Простая проверка, что мы получили изображение, а не HTML-страницу с ошибкой
+                        if image_data and len(image_data) > 1000:
+                            return image_data
+                        else:
+                            logger.warning(f"Pollinations вернул подозрительно маленький ответ ({len(image_data)} байт)")
                     else:
-                        error_text = await resp.text()
-                        logger.error(f"Hugging Face error {resp.status}: {error_text}")
-                        return None
-        except aiohttp.client_exceptions.ClientConnectorDNSError as e:
-            logger.warning(f"DNS ошибка, попытка {attempt+1}/{retries}: {e}")
-            if attempt < retries - 1:
-                await asyncio.sleep(2 ** attempt)  # 1, 2, 4 секунды
-            else:
-                logger.error("Не удалось подключиться после всех попыток")
-                return None
+                        logger.error(f"Pollinations error {resp.status}: {await resp.text()}")
+        except aiohttp.client_exceptions.ClientConnectorError as e:
+            logger.warning(f"Ошибка подключения к Pollinations, попытка {attempt+1}/3: {e}")
         except Exception as e:
-            logger.exception(f"Неизвестная ошибка: {e}")
-            return None
+            logger.exception(f"Неизвестная ошибка при запросе к Pollinations: {e}")
+        
+        if attempt < 2:
+            await asyncio.sleep(2) # Ждём 2 секунды перед повтором
     return None
 
-# ----- Команды бота -----
+# ----- Команды бота (без изменений) -----
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "🔮 *Артефакториум*\n\n"
+        "🔮 *Артефакториум (на Pollinations AI)*\n\n"
         "Я создаю уникальные предметы с помощью нейросети.\n"
         "/buy — получить случайный артефакт с картинкой\n"
         "/help — справка",
@@ -100,7 +97,7 @@ async def cmd_buy(message: types.Message):
     rarity = choose_rarity()
     name = generate_artifact_name(rarity)
     prompt = f"{rarity['prompt_prefix']}, {name}, fantasy artifact, digital art, detailed, beautiful"
-    image_data = await generate_image_hf(prompt)
+    image_data = await generate_image_pollinations(prompt)
     if image_data:
         photo = BytesIO(image_data)
         photo.name = "artifact.png"
@@ -114,7 +111,7 @@ async def cmd_buy(message: types.Message):
 async def fallback(message: types.Message):
     await message.answer("Неизвестная команда. Напишите /start")
 
-# ----- Flask-сервер для Render (занятие порта) -----
+# ----- Flask-сервер для Render (без изменений) -----
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
@@ -124,10 +121,10 @@ def health():
 def run_flask():
     flask_app.run(host='0.0.0.0', port=10000)
 
-# ----- Запуск -----
+# ----- Запуск (без изменений) -----
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Бот запущен (Hugging Face, переменные окружения)")
+    logger.info("Бот запущен, генерация изображений через Pollinations AI")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
